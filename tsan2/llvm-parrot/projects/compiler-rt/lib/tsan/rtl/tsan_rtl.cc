@@ -88,7 +88,6 @@ ThreadState::ThreadState(Context *ctx, int tid, int unique_id, u64 epoch,
                          uptr stk_addr, uptr stk_size,
                          uptr tls_addr, uptr tls_size)
   : fast_state(tid, epoch)
-    , parrot_fast_state(tid)
   // Do not touch these, rely on zero initialization,
   // they may be accessed before the ctor.
   // , ignore_reads_and_writes()
@@ -419,6 +418,53 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
   return thr->clock.get(old.TidWithIgnore()) >= old.epoch();
 }
 #endif
+#if 0
+
+void Parrot_HandleRace(ThreadState *thr,uptr addr, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite){
+	if(!flags()->report_bugs)
+		return;
+	ScopedInRtl in_rtl;
+  Context *ctx = CTX();
+  ThreadRegistryLock l0(ctx->thread_registry);
+
+  ReportType typ = ReportTypeRace;
+  if (thr->is_vptr_access)
+    typ = ReportTypeVptrRace;
+  ScopedReport rep(typ);
+  StackTrace traces[2];
+  const uptr toppc = TraceTopPC(thr);
+  traces[0].ObtainCurrent(thr, toppc);
+  // TODO
+  traces[1].ObtainCurrent(thr, toppc);
+  if (IsFiredSuppression(ctx, rep, traces[1]))
+    return;
+
+	ReportDesc rep;
+
+
+
+  ThreadContext *tctx0 = static_cast<ThreadContext*>(
+      ctx->thread_registry->GetThreadLocked(s.tid()));
+  if !(s.epoch() < tctx->epoch0 || s.epoch() > tctx->epoch1)
+  	rep.AddThread(tctx);
+  rep.AddLocation(addr, 8);
+  ReportLocation *suppress_loc = rep.GetReport()->locs.Size() ?
+                                 rep.GetReport()->locs[0] : 0;
+  if (!OutputReport(ctx, rep, rep.GetReport()->mops[0]->stack,
+                              rep.GetReport()->mops[1]->stack,
+                              suppress_loc))
+    return;
+
+  AddRacyStacks(thr, traces, addr, 8);
+
+
+
+	Printf("[TSAN PARROT RACE] Addr: %0x, conflict range: %s@[%3d,%3d] <--> %s@[%3d,%3d]\n",\
+			addr, cur_IsWrite?"Write":" Read",cur_epoch, cur_epoch_n,  
+			old_IsWrite?"Write":" Read", old_epoch, old_epoch_n);
+
+}
+#endif
 ALWAYS_INLINE USED
 void MemoryAccessImpl(ThreadState *thr, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
@@ -428,30 +474,29 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
   StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
   StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
   */
-
-  if(UNLIKELY(shadow_mem->race(thr->parrot_fast_state.epoch(),thr->parrot_fast_state.epoch_next(),thr->parrot_fast_state.epoch_range(),kAccessIsWrite)))
+  int tid = thr-> tid;
+  u32 epoch = (parrotTurnNum + 2 * tid)[0];
+  u32 epoch_next=(parrotTurnNum + 2 * tid)[1];
+  u32 epoch_range=epoch_next-epoch;
+  if(LIKELY(shadow_mem->no_need_to_update(epoch,kAccessIsWrite))) return;
+  if(UNLIKELY(shadow_mem->race(epoch,epoch_next,epoch_range,kAccessIsWrite))){
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
-	  ;
-//  ShadowValue* fast_sv=shadow_mem;
+//  		Parrot_HandleRace(thr,addr,epoch,epoch_next,kAccessIsWrite,shadow_mem->get_latest_epoch_start(),shadow_mem->get_latest_epoch_next(),shadow_mem->get_latest_IsWrite());
+  }
+  ShadowValue* fast_sv=shadow_mem;
   if(kAccessIsWrite){
-	  shadow_mem->update_write_epoch(thr->parrot_fast_state.epoch(),thr->parrot_fast_state.epoch_range());
-	  /*
-	  for(unsigned int i=1;i<(1<<kAccessSizeLog);++i){
-		  fast_sv++->set_offset(i);
-	  }
-	  */
+	  shadow_mem->update_write_epoch(epoch,epoch_range);
   }
   else{
-	  shadow_mem->update_read_epoch(thr->parrot_fast_state.epoch(),thr->parrot_fast_state.epoch_range());
-	  /*
-	  for(unsigned int i=1;i<(1<<kAccessSizeLog);++i){
-		  fast_sv++->set_offset(i);
-	  }
-	  */
+	  shadow_mem->update_read_epoch(epoch,epoch_range);
+  }
+
+  for(unsigned int i=1;i<(1<<kAccessSizeLog);++i){
+	  fast_sv++->set_offset(i);
   }
   return;
-  HandleRace(thr,NULL,Shadow(0),Shadow(0));
+  HandleRace(thr, (u64*)shadow_mem, Shadow(0), Shadow(0));
 
 #if 0
   // This potentially can live in an MMX/SSE scratch register.
@@ -575,18 +620,14 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
     return;
   }
   FastState fast_state = thr->fast_state;
-  threadLocal &parrot_fast_state=thr->parrot_fast_state;
-  if (fast_state.GetIgnoreBit()){
+  if (parrotTurnNum==0)
+  	parrotTurnNum=get_parrotTurnNum();
+  if (fast_state.GetIgnoreBit()||parrotTurnNum==0||thr->tid==1){
 	  return;
   }
-  if (parrotTurnNum==0){
-  	parrotTurnNum=get_parrotTurnNum();
-	if(parrotTurnNum==0)
-		return;
-	parrot_fast_state.set_turnNum(thr->tid);
+
 //	Printf("for tid=%d\n",thr->tid);
 //	Printf("[TSAN PARROT DEBUG] parrotTurnNum loaded at %0x, turnNum loaded at %0x, epoch is %d\n",parrotTurnNum,parrot_fast_state.turnNum, parrot_fast_state.epoch());
-  }
 //	Printf("[TSAN PARROT DEBUG] shadow_mem is %0x, \n",shadow_mem);
 #if 0
   fast_state.IncrementEpoch();
@@ -601,8 +642,6 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
   TraceAddEvent(thr, fast_state, EventTypeMop, pc);
 #endif
 
-  if(thr->tid == 1)
-	  return;
   MemoryAccessImpl(thr, addr, kAccessSizeLog, kAccessIsWrite, kIsAtomic,
       shadow_mem);
 }
@@ -688,7 +727,7 @@ void MemoryRangeFreed(ThreadState *thr, uptr pc, uptr addr, uptr size) {
   thr->is_freeing = true;
   MemoryAccessRange(thr, pc, addr, size, true);
   thr->is_freeing = false;
-  thr->fast_state.IncrementEpoch();
+//  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, pc);
   Shadow s(thr->fast_state);
   s.ClearIgnoreBit();
@@ -699,7 +738,7 @@ void MemoryRangeFreed(ThreadState *thr, uptr pc, uptr addr, uptr size) {
 }
 
 void MemoryRangeImitateWrite(ThreadState *thr, uptr pc, uptr addr, uptr size) {
-  thr->fast_state.IncrementEpoch();
+//  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, pc);
   Shadow s(thr->fast_state);
   s.ClearIgnoreBit();
@@ -713,7 +752,7 @@ void FuncEntry(ThreadState *thr, uptr pc) {
   DCHECK_EQ(thr->in_rtl, 0);
   StatInc(thr, StatFuncEnter);
   DPrintf2("#%d: FuncEntry %p\n", (int)thr->fast_state.tid(), (void*)pc);
-  thr->fast_state.IncrementEpoch();
+//  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeFuncEnter, pc);
 
   // Shadow stack maintenance can be replaced with
@@ -750,7 +789,7 @@ void FuncExit(ThreadState *thr) {
   DCHECK_EQ(thr->in_rtl, 0);
   StatInc(thr, StatFuncExit);
   DPrintf2("#%d: FuncExit\n", (int)thr->fast_state.tid());
-  thr->fast_state.IncrementEpoch();
+//  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeFuncExit, 0);
 
   DCHECK_GT(thr->shadow_stack_pos, thr->shadow_stack);

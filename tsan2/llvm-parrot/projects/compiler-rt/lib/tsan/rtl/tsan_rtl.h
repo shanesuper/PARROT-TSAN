@@ -399,7 +399,6 @@ struct JmpBuf {
 // This struct is stored in TLS.
 struct ThreadState {
   FastState fast_state;
-  threadLocal parrot_fast_state;
   // Synch epoch represents the threads's epoch before the last synchronization
   // action. It allows to reduce number of shadow state updates.
   // For example, fast_synch_epoch=100, last write to addr X was at epoch=150,
@@ -758,6 +757,7 @@ Trace *ThreadTrace(int tid);
 extern "C" void __tsan_trace_switch();
 void ALWAYS_INLINE TraceAddEvent(ThreadState *thr, FastState fs,
                                         EventType typ, u64 addr) {
+	return;
   DCHECK_GE((int)typ, 0);
   DCHECK_LE((int)typ, 7);
   DCHECK_EQ(GetLsb(addr, 61), addr);

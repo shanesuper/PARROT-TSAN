@@ -3,6 +3,7 @@
 #include <cassert>
 extern u32 *parrotTurnNum;
 namespace __tsan{
+#if 0
 class threadLocal{
 	public:
 		u32 *turnNum;
@@ -55,6 +56,7 @@ class threadLocal{
 		}
 		int get_unused(){return unused;}
 };
+#endif
 /*
  * The content in a ShadowValue
  * 32 bit of the read_epoch_start
@@ -99,11 +101,20 @@ class ShadowValue {
 		u32 get_latest_epoch_start(){
 			return read_epoch_start+write_epoch_start_offset*(write_epoch_start_offset>0);
 		}
+		u32 get_latest_epoch_next(){
+			return write_epoch_start_offset>0?(read_epoch_start+write_epoch_start_offset+write_epoch_range):(read_epoch_start+read_epoch_range);
+		}
+		bool get_latest_IsWrite(){
+			return write_epoch_start_offset>0;
+		}
 		bool same_read_epoch(const u32 &cur_epoch_start){
 			return get_read_epoch_start() == cur_epoch_start;
 		}
 		bool same_write_epoch(const u32 &cur_epoch_start){
 			return get_write_epoch_start() == cur_epoch_start;
+		}
+		bool no_need_to_update(const u32 &cur_epoch_start, const bool &kAccessIsWrite){
+			return kAccessIsWrite?cur_epoch_start<=get_write_epoch_start():cur_epoch_start<=get_read_epoch_start();
 		}
 		//intersection for detection race
 		bool intersect_read_epoch(const u32 &cur_epoch_start, const u32 &cur_epoch_end){
