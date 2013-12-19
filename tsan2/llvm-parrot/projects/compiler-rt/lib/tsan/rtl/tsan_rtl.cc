@@ -24,6 +24,7 @@
 #include "tsan_mman.h"
 #include "tsan_suppressions.h"
 #include "tsan_symbolize.h"
+#include "tsan_report.h"
 #ifndef NULL
 #define NULL 0
 #endif
@@ -39,6 +40,9 @@ namespace __tsan {
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(64);
 #endif
 static char ctx_placeholder[sizeof(Context)] ALIGNED(64);
+const int turnNumMapBits = 10;
+const int turnNumMapSize = 1<<turnNumMapBits;
+static int turnNums[turnNumMapSize];
 
 // Can be overriden by a front-end.
 #ifdef TSAN_EXTERNAL_HOOKS
@@ -418,71 +422,60 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
   return thr->clock.get(old.TidWithIgnore()) >= old.epoch();
 }
 #endif
-#if 0
 
-void Parrot_HandleRace(ThreadState *thr,uptr addr, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite){
+extern ReportStack *SymbolizeStack(const StackTrace & trace);
+void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite,uptr pc){
 	if(!flags()->report_bugs)
 		return;
 	ScopedInRtl in_rtl;
   Context *ctx = CTX();
   ThreadRegistryLock l0(ctx->thread_registry);
 
-  ReportType typ = ReportTypeRace;
-  if (thr->is_vptr_access)
-    typ = ReportTypeVptrRace;
-  ScopedReport rep(typ);
-  StackTrace traces[2];
-  const uptr toppc = TraceTopPC(thr);
-  traces[0].ObtainCurrent(thr, toppc);
-  // TODO
-  traces[1].ObtainCurrent(thr, toppc);
-  if (IsFiredSuppression(ctx, rep, traces[1]))
-    return;
+  ReportStack *stack = SymbolizeCode(pc);
 
-	ReportDesc rep;
+  Printf("\e[1;32m==================\e[0m\n");
+  Printf("%s", "\e[1;31m");
+  Printf("WARNING: TSAN+PARROT: (pid=%d)\n", (int)internal_getpid());
+  Printf("%s", "\e[0m");
 
+  Printf("%s", "\e[1;36m");
+  PrintStack(stack);
+  Printf("%s", "\e[0m");
 
+  Printf("%s", "\e[1;33m");
+  Printf("  %s of size %d at %p by Thread #%d",
+      cur_IsWrite?"Write":"Read",
+      size, (void*)addr,
+      thr->tid);
+  Printf("%s", "\e[0m");
+  Printf("\n");
 
-  ThreadContext *tctx0 = static_cast<ThreadContext*>(
-      ctx->thread_registry->GetThreadLocked(s.tid()));
-  if !(s.epoch() < tctx->epoch0 || s.epoch() > tctx->epoch1)
-  	rep.AddThread(tctx);
-  rep.AddLocation(addr, 8);
-  ReportLocation *suppress_loc = rep.GetReport()->locs.Size() ?
-                                 rep.GetReport()->locs[0] : 0;
-  if (!OutputReport(ctx, rep, rep.GetReport()->mops[0]->stack,
-                              rep.GetReport()->mops[1]->stack,
-                              suppress_loc))
-    return;
+  Printf("%s", "\e[1;36m");
+  Printf("    Previous access is at Thread #%d, with epoch range [%d,%d]\n", turnNums[old_epoch%turnNumMapSize], old_epoch, old_epoch_n);
+  Printf("%s", "\e[0m");
+  Printf("\n");
 
-  AddRacyStacks(thr, traces, addr, 8);
-
-
-
-	Printf("[TSAN PARROT RACE] Addr: %0x, conflict range: %s@[%3d,%3d] <--> %s@[%3d,%3d]\n",\
-			addr, cur_IsWrite?"Write":" Read",cur_epoch, cur_epoch_n,  
-			old_IsWrite?"Write":" Read", old_epoch, old_epoch_n);
 
 }
-#endif
+
 ALWAYS_INLINE USED
 void MemoryAccessImpl(ThreadState *thr, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
-    ShadowValue* shadow_mem) {
-/*	Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_mem:%0x\n", thr->tid, thr->parrot_fast_state.epoch(),thr->parrot_fast_state.epoch_next(),shadow_mem);
+    ShadowValue* shadow_mem,uptr pc) {
   StatInc(thr, StatMop);
   StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
   StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
-  */
+  
   int tid = thr-> tid;
   u32 epoch = (parrotTurnNum + 2 * tid)[0];
   u32 epoch_next=(parrotTurnNum + 2 * tid)[1];
   u32 epoch_range=epoch_next-epoch;
+//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], addr:%0x\n", thr->tid, epoch,epoch_next,addr);
   if(LIKELY(shadow_mem->no_need_to_update(epoch,kAccessIsWrite))) return;
   if(UNLIKELY(shadow_mem->race(epoch,epoch_next,epoch_range,kAccessIsWrite))){
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
-//  		Parrot_HandleRace(thr,addr,epoch,epoch_next,kAccessIsWrite,shadow_mem->get_latest_epoch_start(),shadow_mem->get_latest_epoch_next(),shadow_mem->get_latest_IsWrite());
+  	Parrot_HandleRace(thr,addr,1<<kAccessSizeLog,epoch,epoch_next,kAccessIsWrite,shadow_mem->get_latest_epoch_start(),shadow_mem->get_latest_epoch_next(),shadow_mem->get_latest_IsWrite(),pc);
   }
   ShadowValue* fast_sv=shadow_mem;
   if(kAccessIsWrite){
@@ -643,7 +636,7 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
 #endif
 
   MemoryAccessImpl(thr, addr, kAccessSizeLog, kAccessIsWrite, kIsAtomic,
-      shadow_mem);
+      shadow_mem,pc);
 }
 
 static void MemoryRangeSet(ThreadState *thr, uptr pc, uptr addr, uptr size,
@@ -754,6 +747,9 @@ void FuncEntry(ThreadState *thr, uptr pc) {
   DPrintf2("#%d: FuncEntry %p\n", (int)thr->fast_state.tid(), (void*)pc);
 //  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeFuncEnter, pc);
+  if(LIKELY(parrotTurnNum!=NULL)){
+  u32 epoch = (parrotTurnNum + 2 * thr->tid)[0];
+  turnNums[epoch%turnNumMapSize]=thr->tid;}
 
   // Shadow stack maintenance can be replaced with
   // stack unwinding during trace switch (which presumably must be faster).

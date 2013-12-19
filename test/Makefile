@@ -7,8 +7,8 @@ endif
 else
 	DIR = llvm
 endif
-CC 		:= $(XTERN_ROOT)/../tsan2/$(DIR)/build/Debug+Asserts/bin/clang
-CXX		:= $(XTERN_ROOT)/../tsan2/$(DIR)/build/Debug+Asserts/bin/clang++
+CC 		:= $(XTERN_ROOT)/../tsan2/$(DIR)/build/Release+Asserts/bin/clang
+CXX		:= $(XTERN_ROOT)/../tsan2/$(DIR)/build/Release+Asserts/bin/clang++
 CFLAGS  := -O0 -g -w -fsanitize=thread -fPIE -fsanitize-blacklist=blacklist
 CXXFLAGS:= -O0 -g -w -fsanitize=thread -fPIE -fsanitize-blacklist=blacklist
 LDFLAGS := -fsanitize=thread -pie

@@ -30,7 +30,7 @@ namespace __tsan {
 
 using namespace __sanitizer;  // NOLINT
 
-static ReportStack *SymbolizeStack(const StackTrace& trace);
+extern ReportStack *SymbolizeStack(const StackTrace& trace);
 
 void TsanCheckFailed(const char *file, int line, const char *cond,
                      u64 v1, u64 v2) {
@@ -113,7 +113,7 @@ ReportStack *SymbolizeStackId(u32 stack_id) {
 }
 #endif
 
-static ReportStack *SymbolizeStack(const StackTrace& trace) {
+ReportStack *SymbolizeStack(const StackTrace& trace) {
   if (trace.IsEmpty())
     return 0;
   ReportStack *stack = 0;
