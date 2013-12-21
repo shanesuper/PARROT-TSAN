@@ -29,12 +29,13 @@
 #define NULL 0
 #endif
 volatile int __tsan_resumed = 0;
-
 extern "C" void __tsan_resume() {
   __tsan_resumed = 1;
 }
 
 namespace __tsan {
+char* pcs=NULL;
+char* mems=NULL;
 
 #ifndef TSAN_GO
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(64);
@@ -235,6 +236,10 @@ void Initialize(ThreadState *thr) {
   ctx = new(ctx_placeholder) Context;
 #ifndef TSAN_GO
   InitializeShadowMemory();
+  if(pcs ==NULL)
+  	pcs=new char[1<<18];
+  if(mems ==NULL)
+  	mems=new char[1<<18];
 #endif
   InitializeFlags(&ctx->flags, env);
   // Setup correct file descriptor for error reports.
@@ -425,9 +430,17 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
 
 extern ReportStack *SymbolizeStack(const StackTrace & trace);
 void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite,uptr pc){
-	if(!flags()->report_bugs)
+	if(!flags()->report_bugs||pcs==NULL||mems==NULL)
 		return;
 	ScopedInRtl in_rtl;
+	if(pcs[pc & ((1<<19)-1)]==1)
+		return;
+	else
+		pcs[pc & ((1<<19)-1)]=1;
+	if(mems[addr & ((1<<19)-1)]==1)
+		return;
+	else
+		mems[addr & ((1<<19)-1)]=1;
   Context *ctx = CTX();
   ThreadRegistryLock l0(ctx->thread_registry);
 

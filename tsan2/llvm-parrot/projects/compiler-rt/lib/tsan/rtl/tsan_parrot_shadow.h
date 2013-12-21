@@ -172,19 +172,16 @@ class ShadowValue {
 		void set_offset(u8 ost){
 			offset=ost;
 		}
-		int get_freed(){return freed;}
 		int get_unused(){return unused;}
 	private:
 		// The offset to the real shadow value we are looking into
 		u8 offset    :3;
 		// Reserved
-		u8 freed    :1;
-		u8 unused    :4;
 		
-		u32 read_epoch_start;
+		s13 write_epoch_start_offset;
 		u8 read_epoch_range;
-		s8 write_epoch_start_offset;
 		u8 write_epoch_range;
+		u32 read_epoch_start;
 };
 const ShadowValue SV_Zero=ShadowValue(0);
 const ShadowValue SV_Rodata=ShadowValue(u64(-1));
