@@ -113,9 +113,6 @@ class ShadowValue {
 		bool same_write_epoch(const u32 &cur_epoch_start){
 			return get_write_epoch_start() == cur_epoch_start;
 		}
-		bool no_need_to_update(const u32 &cur_epoch_start, const bool &kAccessIsWrite){
-			return kAccessIsWrite?cur_epoch_start<=get_write_epoch_start():cur_epoch_start<=get_read_epoch_start();
-		}
 		//intersection for detection race
 		bool intersect_read_epoch(const u32 &cur_epoch_start, const u32 &cur_epoch_end){
 			return cur_epoch_start < get_read_epoch_end();
@@ -128,42 +125,51 @@ class ShadowValue {
 		void update_read_epoch(const u32 &cur_epoch_start,const u8 &cur_epoch_range){
 			// BE VERY CAREFUL: the args are start, range instead of start, end
 			if (cur_epoch_start <= read_epoch_start) return;
+			s32 write_epoch_start_offset32=write_epoch_start_offset-cur_epoch_start+read_epoch_start;
+			if(UNLIKELY(write_epoch_start_offset32<-128)){ write_epoch_start_offset = -128;}
+			else{write_epoch_start_offset = write_epoch_start_offset32;}
 			read_epoch_start = cur_epoch_start;
 			read_epoch_range = cur_epoch_range;
-			s8 backup=write_epoch_start_offset;
-			write_epoch_start_offset-=cur_epoch_start-read_epoch_start;
-			if(UNLIKELY(write_epoch_start_offset>backup))
-				write_epoch_start_offset=-128;
 			return;
 		}
 		void update_write_epoch(const u32 &cur_epoch_start,const u8 &cur_epoch_range){
 			if (cur_epoch_start <= read_epoch_start + write_epoch_start_offset) return;
 			s32 write_epoch_start_offset32=cur_epoch_start-read_epoch_start;
-			write_epoch_start_offset = (s8)write_epoch_start_offset32;
+			if(UNLIKELY(write_epoch_start_offset32<-128)) write_epoch_start_offset32=-128;
+			else if(UNLIKELY(write_epoch_start_offset32>127)) write_epoch_start_offset = 127;
+			else
+			{
+				write_epoch_start_offset = (s8)write_epoch_start_offset32;
+			}
 			write_epoch_range = cur_epoch_range;
-
-			assert(write_epoch_start_offset32 <= 127);
-			assert(write_epoch_start_offset32 >= -128);
-
 			return;
 		}
 		//determine data race
-		bool race(const u32 &cur_epoch_start,const u32 &cur_epoch_end, const u8 &cur_epoch_range, bool is_write){
-			bool ret;
+		// ret:[need_update|race]
+		int race(const u32 &cur_epoch_start,const u32 &cur_epoch_end, const u8 &cur_epoch_range, bool is_write){
+			int ret;
 			if(is_write){
-					if(same_write_epoch(cur_epoch_start)) return false;
+					if(same_write_epoch(cur_epoch_start)) return 0;
+					if(same_read_epoch(cur_epoch_start)) return 2;
 					ret=intersect_read_epoch(cur_epoch_start,cur_epoch_end)\
 							||intersect_write_epoch(cur_epoch_start,cur_epoch_end);
-					update_write_epoch(cur_epoch_start,cur_epoch_range);
+					if(UNLIKELY(cur_epoch_start>get_write_epoch_start())){
+						update_write_epoch(cur_epoch_start,cur_epoch_range);
+						ret+=2;
+					}
 					return ret;
 			}
 			else{
-					if(same_read_epoch(cur_epoch_start)) return false;
+					if(same_read_epoch(cur_epoch_start)) return 0;
+					if(same_write_epoch(cur_epoch_start)) return 2;
 					ret=intersect_write_epoch(cur_epoch_start,cur_epoch_end);
-					update_read_epoch(cur_epoch_start,cur_epoch_range);
+					if(UNLIKELY(cur_epoch_start>get_read_epoch_start())){
+						update_read_epoch(cur_epoch_start,cur_epoch_range);
+						ret+=2;
+					}
 					return ret;	
 			}
-			return false;
+			return 0;
 		}
 		//comparison
 		bool operator == (const ShadowValue &sval) const{
@@ -177,8 +183,9 @@ class ShadowValue {
 		// The offset to the real shadow value we are looking into
 		u8 offset    :3;
 		// Reserved
+		u8 unused    :5;
 		
-		s13 write_epoch_start_offset;
+		s8 write_epoch_start_offset;
 		u8 read_epoch_range;
 		u8 write_epoch_range;
 		u32 read_epoch_start;

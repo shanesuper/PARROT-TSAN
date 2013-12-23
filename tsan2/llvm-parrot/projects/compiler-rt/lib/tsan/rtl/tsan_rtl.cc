@@ -36,6 +36,7 @@ extern "C" void __tsan_resume() {
 namespace __tsan {
 char* pcs=NULL;
 char* mems=NULL;
+uptr* history=NULL;
 
 #ifndef TSAN_GO
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(64);
@@ -236,10 +237,18 @@ void Initialize(ThreadState *thr) {
   ctx = new(ctx_placeholder) Context;
 #ifndef TSAN_GO
   InitializeShadowMemory();
-  if(pcs ==NULL)
+  if(pcs ==NULL){
   	pcs=new char[1<<18];
-  if(mems ==NULL)
+	internal_memset(pcs,0,sizeof(char)*(1<<18));
+  }
+  if(mems ==NULL){
   	mems=new char[1<<18];
+	internal_memset(mems,0,sizeof(char)*(1<<18));
+  }
+  if(history == NULL){
+	 history=new uptr[1<<18];
+	 internal_memset(history,0,sizeof(uptr)*(1<<18));
+  }
 #endif
   InitializeFlags(&ctx->flags, env);
   // Setup correct file descriptor for error reports.
@@ -430,17 +439,23 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
 
 extern ReportStack *SymbolizeStack(const StackTrace & trace);
 void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite,uptr pc){
-	if(!flags()->report_bugs||pcs==NULL||mems==NULL)
+	if(!flags()->report_bugs||pcs==NULL)
+		return;
+	if(cur_epoch_n<=old_epoch)
+		return;
+	if(old_epoch_n<=cur_epoch)
+		return;
+	if(cur_epoch==0||old_epoch==0)
 		return;
 	ScopedInRtl in_rtl;
-	if(pcs[pc & ((1<<19)-1)]==1)
+	if(pcs[pc & ((1<<18)-1)]==1)
 		return;
 	else
-		pcs[pc & ((1<<19)-1)]=1;
-	if(mems[addr & ((1<<19)-1)]==1)
+		pcs[pc & ((1<<18)-1)]=1;
+	if(mems[addr & ((1<<18)-1)]==1)
 		return;
 	else
-		mems[addr & ((1<<19)-1)]=1;
+		mems[addr & ((1<<18)-1)]=1;
   Context *ctx = CTX();
   ThreadRegistryLock l0(ctx->thread_registry);
 
@@ -456,15 +471,20 @@ void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 c
   Printf("%s", "\e[0m");
 
   Printf("%s", "\e[1;33m");
-  Printf("  %s of size %d at %p by Thread #%d",
+  Printf("  %s of size %d at %p by Thread #%d, with epoch range [%d,%d]",
       cur_IsWrite?"Write":"Read",
       size, (void*)addr,
-      thr->tid);
+      thr->tid,cur_epoch, cur_epoch_n );
   Printf("%s", "\e[0m");
   Printf("\n");
 
   Printf("%s", "\e[1;36m");
-  Printf("    Previous access is at Thread #%d, with epoch range [%d,%d]\n", turnNums[old_epoch%turnNumMapSize], old_epoch, old_epoch_n);
+  Printf("    Previous access is %s at Thread #%d, with epoch range [%d,%d]\n", old_IsWrite?"Write":"Read",turnNums[old_epoch%turnNumMapSize], old_epoch, old_epoch_n);
+  uptr old_pc=history[addr & ((1<<18)-1)];
+  if(old_pc!=NULL){
+  	ReportStack *old_stack = SymbolizeCode(old_pc);
+	PrintStack(old_stack);
+  }
   Printf("%s", "\e[0m");
   Printf("\n");
 
@@ -480,26 +500,24 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
   StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
   
   int tid = thr-> tid;
-  u32 epoch = (parrotTurnNum + 2 * tid)[0];
-  u32 epoch_next=(parrotTurnNum + 2 * tid)[1];
+  u32* parrotTurnNumPtr = parrotTurnNum + 2*tid;
+  u32 epoch = parrotTurnNumPtr[0];
+  u32 epoch_next=parrotTurnNumPtr[1];
   u32 epoch_range=epoch_next-epoch;
-//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], addr:%0x\n", thr->tid, epoch,epoch_next,addr);
-  if(LIKELY(shadow_mem->no_need_to_update(epoch,kAccessIsWrite))) return;
-  if(UNLIKELY(shadow_mem->race(epoch,epoch_next,epoch_range,kAccessIsWrite))){
+  ShadowValue sm = atomic_load((atomic_uint64_t*)shadow_mem, memory_order_relaxed);
+  ShadowValue backup=sm;
+//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
+  int result=sm.race(epoch,epoch_next,epoch_range,kAccessIsWrite);
+  if(UNLIKELY(result&1)){
+  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
-  	Parrot_HandleRace(thr,addr,1<<kAccessSizeLog,epoch,epoch_next,kAccessIsWrite,shadow_mem->get_latest_epoch_start(),shadow_mem->get_latest_epoch_next(),shadow_mem->get_latest_IsWrite(),pc);
+	if(flags()->report_bugs)
+  		Parrot_HandleRace(thr,addr,1<<kAccessSizeLog,epoch,epoch_next,kAccessIsWrite,backup.get_latest_epoch_start(),backup.get_latest_epoch_next(),backup.get_latest_IsWrite(),pc);
   }
-  ShadowValue* fast_sv=shadow_mem;
-  if(kAccessIsWrite){
-	  shadow_mem->update_write_epoch(epoch,epoch_range);
-  }
-  else{
-	  shadow_mem->update_read_epoch(epoch,epoch_range);
-  }
-
-  for(unsigned int i=1;i<(1<<kAccessSizeLog);++i){
-	  fast_sv++->set_offset(i);
+  if(UNLIKELY(result&2)){
+  	atomic_store((atomic_uint64_t*)shadow_mem, *((u64*)&sm), memory_order_relaxed);
+	if(history!=NULL) history[addr & ((1<<18)-1)] = pc;
   }
   return;
   HandleRace(thr, (u64*)shadow_mem, Shadow(0), Shadow(0));
