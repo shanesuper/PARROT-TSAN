@@ -501,15 +501,14 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
   
   int tid = thr-> tid;
   u32* parrotTurnNumPtr = parrotTurnNum + 2*tid;
-  u32 epoch = parrotTurnNumPtr[0];
-  u32 epoch_next=parrotTurnNumPtr[1];
-  u32 epoch_range=epoch_next-epoch;
+  u16 epoch = parrotTurnNumPtr[0];
+  u16 epoch_next=parrotTurnNumPtr[1];
   ShadowValue sm = atomic_load((atomic_uint64_t*)shadow_mem, memory_order_relaxed);
   ShadowValue backup=sm;
 //  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
-  int result=sm.race(epoch,epoch_next,epoch_range,kAccessIsWrite);
+  int result=sm.race(epoch,epoch_next,kAccessIsWrite);
   if(UNLIKELY(result&1)){
-  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
+//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
 	if(flags()->report_bugs)
@@ -702,10 +701,6 @@ static void MemoryRangeSet(ThreadState *thr, uptr pc, uptr addr, uptr size,
     // FIXME: may overwrite a part outside the region
     for (uptr i = 0; i < size / kShadowCell * kShadowCnt;) {
       p[i++] = val;
-      for (uptr j = 1; j < kShadowCnt; j++){
-		  p[i].Clear();
-		  p[i++].set_offset(j);
-	  }
     }
   } else {
     // The region is big, reset only beginning and end.
@@ -716,10 +711,6 @@ static void MemoryRangeSet(ThreadState *thr, uptr pc, uptr addr, uptr size,
     // Set at least first kPageSize/2 to page boundary.
     while ((p < begin + kPageSize / kShadowSize / 2) || ((uptr)p % kPageSize)) {
       *p++ = val;
-      for (uptr j = 1; j < kShadowCnt; j++){
-		  p->Clear();
-		  p++ -> set_offset(j);
-	  }
     }
     // Reset middle part.
     ShadowValue *p1 = p;
@@ -729,10 +720,6 @@ static void MemoryRangeSet(ThreadState *thr, uptr pc, uptr addr, uptr size,
     // Set the ending.
     while (p < end) {
       *p++ = val;
-      for (uptr j = 1; j < kShadowCnt; j++){
-		  p->Clear();
-		  p++ -> set_offset(j);
-	  }
     }
   }
 }
@@ -742,6 +729,7 @@ void MemoryResetRange(ThreadState *thr, uptr pc, uptr addr, uptr size) {
 }
 
 void MemoryRangeFreed(ThreadState *thr, uptr pc, uptr addr, uptr size) {
+	return;
   // Processing more than 1k (4k of shadow) is expensive,
   // can cause excessive memory consumption (user does not necessary touch
   // the whole range) and most likely unnecessary.
@@ -762,6 +750,7 @@ void MemoryRangeFreed(ThreadState *thr, uptr pc, uptr addr, uptr size) {
 }
 
 void MemoryRangeImitateWrite(ThreadState *thr, uptr pc, uptr addr, uptr size) {
+	return;
 //  thr->fast_state.IncrementEpoch();
   TraceAddEvent(thr, thr->fast_state, EventTypeMop, pc);
   Shadow s(thr->fast_state);

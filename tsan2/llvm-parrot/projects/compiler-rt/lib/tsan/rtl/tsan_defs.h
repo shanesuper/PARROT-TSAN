@@ -45,19 +45,19 @@ const uptr kShadowStackSize = 64 * 1024;
 const uptr kTraceStackSize = 256;
 
 #ifdef TSAN_SHADOW_COUNT
-# if TSAN_SHADOW_COUNT == 8 \
-  || TSAN_SHADOW_COUNT == 8 || TSAN_SHADOW_COUNT == 8
+# if TSAN_SHADOW_COUNT == 1 \
+  || TSAN_SHADOW_COUNT == 1 || TSAN_SHADOW_COUNT == 1
 const uptr kShadowCnt = TSAN_SHADOW_COUNT;
 # else
-#   error "TSAN_SHADOW_COUNT must be one of 8,8,8"
+#   error "TSAN_SHADOW_COUNT must one"
 # endif
 #else
 // Count of shadow values in a shadow cell.
-const uptr kShadowCnt = 8;
+const uptr kShadowCnt = 1;
 #endif
 
 // That many user bytes are mapped onto a single shadow cell.
-const uptr kShadowCell = 8;
+const uptr kShadowCell = 1;
 
 // Size of a single shadow value (u64).
 const uptr kShadowSize = 8;

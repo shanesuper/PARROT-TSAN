@@ -66,6 +66,7 @@ class threadLocal{
  * 3 bit, address offset to point to the real shadowValue data
  * 5 bit, reserved
  */
+#if 0
 class ShadowValue {
 	public:
 		ShadowValue(u64 u){
@@ -189,6 +190,110 @@ class ShadowValue {
 		u8 read_epoch_range;
 		u8 write_epoch_range;
 		u32 read_epoch_start;
+};
+#endif
+class ShadowValue {
+	public:
+		ShadowValue(u64 u){
+			*(u64 *)this=u;
+		}
+		ShadowValue(){
+			Clear();
+		}
+		void Clear(){
+			*(u64 *)this=0ULL;
+		}
+		u16 get_read_epoch_start(){
+			return read_epoch_start;
+		}
+		u16 get_read_epoch_end(){
+			return read_epoch_end;
+		}
+		u16 get_write_epoch_start(){
+			return write_epoch_start;
+		}
+		u16 get_write_epoch_end(){
+			return write_epoch_end;
+		}
+		u16 get_latest_epoch_start(){
+			return read_epoch_start>=write_epoch_start?read_epoch_start:write_epoch_start;
+		}
+		u16 get_latest_epoch_next(){
+			return read_epoch_start>=write_epoch_start?read_epoch_end:write_epoch_end;
+		}
+		bool get_latest_IsWrite(){
+			return write_epoch_start>=read_epoch_start;
+		}
+		bool same_read_epoch(const u16 &cur_epoch_start){
+			return get_read_epoch_start() == cur_epoch_start;
+		}
+		bool same_write_epoch(const u16 &cur_epoch_start){
+			return get_write_epoch_start() == cur_epoch_start;
+		}
+		//intersection for detection race
+		bool intersect_read_epoch(const u16 &cur_epoch_start, const u16 &cur_epoch_end){
+			return cur_epoch_start < get_read_epoch_end();
+		}
+		bool intersect_write_epoch(const u16 &cur_epoch_start,const u16 &cur_epoch_end){
+			return cur_epoch_start < get_write_epoch_end();
+		}
+
+		//update
+		void update_read_epoch(const u16 &cur_epoch_start,const u16 &cur_epoch_next){
+			read_epoch_start = cur_epoch_start;
+			read_epoch_end = cur_epoch_next;
+			return;
+		}
+		void update_write_epoch(const u16 &cur_epoch_start,const u16 &cur_epoch_next){
+			write_epoch_start = cur_epoch_start;
+			write_epoch_end = cur_epoch_next;
+			return;
+		}
+		//determine data race
+		// ret:[need_update|race]
+		int race(const u16 &cur_epoch_start,const u16 &cur_epoch_end, bool is_write){
+			int ret;
+			if(is_write){
+					if(same_write_epoch(cur_epoch_start))
+						return 0;
+					if(same_read_epoch(cur_epoch_start)) {
+						update_write_epoch(cur_epoch_start,cur_epoch_end);
+						return 2;
+					}
+					ret=intersect_read_epoch(cur_epoch_start,cur_epoch_end)\
+							||intersect_write_epoch(cur_epoch_start,cur_epoch_end);
+					if(UNLIKELY(cur_epoch_start>get_write_epoch_start())){
+						update_write_epoch(cur_epoch_start,cur_epoch_end);
+						ret+=2;
+					}
+					return ret;
+			}
+			else{
+					if(same_read_epoch(cur_epoch_start)) 
+						return 0;
+					if(same_write_epoch(cur_epoch_start)) 
+					{
+						update_read_epoch(cur_epoch_start,cur_epoch_end);
+						return 2;
+					}
+					ret=intersect_write_epoch(cur_epoch_start,cur_epoch_end);
+					if(UNLIKELY(cur_epoch_start>get_read_epoch_start())){
+						update_read_epoch(cur_epoch_start,cur_epoch_end);
+						ret+=2;
+					}
+					return ret;	
+			}
+			return 0;
+		}
+		//comparison
+		bool operator == (const ShadowValue &sval) const{
+			return *(u64 *)this == *(u64 *)&sval;
+		}
+	private:
+		u16 read_epoch_start;
+		u16 read_epoch_end;
+		u16 write_epoch_start;
+		u16 write_epoch_end;
 };
 const ShadowValue SV_Zero=ShadowValue(0);
 const ShadowValue SV_Rodata=ShadowValue(u64(-1));
