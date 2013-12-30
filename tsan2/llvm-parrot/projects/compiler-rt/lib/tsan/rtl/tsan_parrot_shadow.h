@@ -232,10 +232,10 @@ class ShadowValue {
 		}
 		//intersection for detection race
 		bool intersect_read_epoch(const u16 &cur_epoch_start, const u16 &cur_epoch_end){
-			return cur_epoch_start < get_read_epoch_end();
+			return cur_epoch_start < get_read_epoch_end() && cur_epoch_start != get_read_epoch_start();
 		}
 		bool intersect_write_epoch(const u16 &cur_epoch_start,const u16 &cur_epoch_end){
-			return cur_epoch_start < get_write_epoch_end();
+			return cur_epoch_start < get_write_epoch_end() && cur_epoch_start != get_write_epoch_start();
 		}
 
 		//update
@@ -252,14 +252,10 @@ class ShadowValue {
 		//determine data race
 		// ret:[need_update|race]
 		int race(const u16 &cur_epoch_start,const u16 &cur_epoch_end, bool is_write){
-			int ret;
+			int ret=0;
 			if(is_write){
 					if(same_write_epoch(cur_epoch_start))
 						return 0;
-					if(same_read_epoch(cur_epoch_start)) {
-						update_write_epoch(cur_epoch_start,cur_epoch_end);
-						return 2;
-					}
 					ret=intersect_read_epoch(cur_epoch_start,cur_epoch_end)\
 							||intersect_write_epoch(cur_epoch_start,cur_epoch_end);
 					if(UNLIKELY(cur_epoch_start>get_write_epoch_start())){
@@ -271,11 +267,6 @@ class ShadowValue {
 			else{
 					if(same_read_epoch(cur_epoch_start)) 
 						return 0;
-					if(same_write_epoch(cur_epoch_start)) 
-					{
-						update_read_epoch(cur_epoch_start,cur_epoch_end);
-						return 2;
-					}
 					ret=intersect_write_epoch(cur_epoch_start,cur_epoch_end);
 					if(UNLIKELY(cur_epoch_start>get_read_epoch_start())){
 						update_read_epoch(cur_epoch_start,cur_epoch_end);
