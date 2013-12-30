@@ -36,7 +36,8 @@ extern "C" void __tsan_resume() {
 namespace __tsan {
 char* pcs=NULL;
 char* mems=NULL;
-uptr* history=NULL;
+uptr* history_r=NULL;
+uptr* history_w=NULL;
 
 #ifndef TSAN_GO
 THREADLOCAL char cur_thread_placeholder[sizeof(ThreadState)] ALIGNED(64);
@@ -245,9 +246,13 @@ void Initialize(ThreadState *thr) {
   	mems=new char[1<<18];
 	internal_memset(mems,0,sizeof(char)*(1<<18));
   }
-  if(history == NULL){
-	 history=new uptr[1<<18];
-	 internal_memset(history,0,sizeof(uptr)*(1<<18));
+  if(history_r == NULL){
+	 history_r=new uptr[1<<18];
+	 internal_memset(history_r,0,sizeof(uptr)*(1<<18));
+  }
+  if(history_w == NULL){
+	 history_w=new uptr[1<<18];
+	 internal_memset(history_w,0,sizeof(uptr)*(1<<18));
   }
 #endif
   InitializeFlags(&ctx->flags, env);
@@ -438,24 +443,30 @@ static inline bool HappensBefore(Shadow old, ThreadState *thr) {
 #endif
 
 extern ReportStack *SymbolizeStack(const StackTrace & trace);
-void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_epoch, u32 old_epoch_n,bool old_IsWrite,uptr pc){
-	if(!flags()->report_bugs||pcs==NULL)
+void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 cur_epoch_n,bool cur_IsWrite, u32 old_read_epoch, u32 old_read_epoch_n, u32 old_write_epoch, u32 old_write_epoch_n,uptr pc){
+	if(!flags()->report_bugs||pcs==NULL||pcs[pc & ((1<<18)-1)]==1||mems[addr & ((1<<18)-1)]==1)
 		return;
-	if(cur_epoch_n<=old_epoch)
-		return;
-	if(old_epoch_n<=cur_epoch)
-		return;
+	u32 old_epoch = old_read_epoch>old_write_epoch?old_read_epoch:old_write_epoch;
 	if(cur_epoch==0||old_epoch==0)
 		return;
+	s32 diff=(s32)old_write_epoch_n-old_write_epoch;
+	if(diff>256||diff<-256)
+		return;
+	diff=(s32)old_read_epoch_n-old_read_epoch;
+	if(diff>256||diff<-256)
+		return;
+	if(cur_IsWrite){
+		if((cur_epoch>=old_write_epoch_n||cur_epoch_n<=old_write_epoch||cur_epoch==old_write_epoch)&&(cur_epoch>=old_read_epoch_n||cur_epoch_n<=old_read_epoch||cur_epoch==old_read_epoch))
+			return;
+	}
+	else{
+		if(cur_epoch>=old_write_epoch_n||cur_epoch_n<=old_write_epoch)
+			return;
+	}
+
 	ScopedInRtl in_rtl;
-	if(pcs[pc & ((1<<18)-1)]==1)
-		return;
-	else
-		pcs[pc & ((1<<18)-1)]=1;
-	if(mems[addr & ((1<<18)-1)]==1)
-		return;
-	else
-		mems[addr & ((1<<18)-1)]=1;
+	pcs[pc & ((1<<18)-1)]=1;
+	mems[addr & ((1<<18)-1)]=1;
   Context *ctx = CTX();
   ThreadRegistryLock l0(ctx->thread_registry);
 
@@ -479,11 +490,17 @@ void Parrot_HandleRace(ThreadState *thr,uptr addr,int size, u32 cur_epoch, u32 c
   Printf("\n");
 
   Printf("%s", "\e[1;36m");
-  Printf("    Previous access is %s at Thread #%d, with epoch range [%d,%d]\n", old_IsWrite?"Write":"Read",turnNums[old_epoch%turnNumMapSize], old_epoch, old_epoch_n);
-  uptr old_pc=history[addr & ((1<<18)-1)];
-  if(old_pc!=NULL){
-  	ReportStack *old_stack = SymbolizeCode(old_pc);
-	PrintStack(old_stack);
+  uptr old_pc_r=history_r[addr & ((1<<18)-1)];
+  uptr old_pc_w=history_w[addr & ((1<<18)-1)];
+  if(old_pc_r!=NULL){
+    Printf("    Previous read access is at Thread #%d, with epoch range [%d,%d]\n", turnNums[old_read_epoch%turnNumMapSize], old_read_epoch, old_read_epoch_n);
+  	ReportStack *old_stack_r = SymbolizeCode(old_pc_r);
+	PrintStack(old_stack_r);
+  }
+  if(old_pc_w!=NULL){
+    Printf("    Previous write access is at Thread #%d, with epoch range [%d,%d]\n", turnNums[old_write_epoch%turnNumMapSize], old_write_epoch, old_write_epoch_n);
+  	ReportStack *old_stack_w = SymbolizeCode(old_pc_w);
+	PrintStack(old_stack_w);
   }
   Printf("%s", "\e[0m");
   Printf("\n");
@@ -512,11 +529,18 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
 	if(flags()->report_bugs)
-  		Parrot_HandleRace(thr,addr,1<<kAccessSizeLog,epoch,epoch_next,kAccessIsWrite,backup.get_latest_epoch_start(),backup.get_latest_epoch_next(),backup.get_latest_IsWrite(),pc);
+  		Parrot_HandleRace(thr,addr,1<<kAccessSizeLog,epoch,epoch_next,kAccessIsWrite,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),pc);
   }
   if(UNLIKELY(result&2)){
   	atomic_store((atomic_uint64_t*)shadow_mem, *((u64*)&sm), memory_order_relaxed);
-	if(history!=NULL) history[addr & ((1<<18)-1)] = pc;
+	if(flags()->report_bugs){
+		if(kAccessIsWrite){
+			if(history_w!=NULL) history_w[addr & ((1<<18)-1)] = pc;
+		}
+		else{
+			if(history_r!=NULL) history_r[addr & ((1<<18)-1)] = pc;
+		}
+	}
   }
   return;
   HandleRace(thr, (u64*)shadow_mem, Shadow(0), Shadow(0));
@@ -717,10 +741,11 @@ static void MemoryRangeSet(ThreadState *thr, uptr pc, uptr addr, uptr size,
     p = RoundDown(end, kPageSize);
     UnmapOrDie((void*)p1, (uptr)p - (uptr)p1);
     MmapFixedNoReserve((uptr)p1, (uptr)p - (uptr)p1);
-    // Set the ending.
+    /* Set the ending.
     while (p < end) {
       *p++ = val;
     }
+	*/
   }
 }
 

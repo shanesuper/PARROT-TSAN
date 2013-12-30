@@ -1,0 +1,3 @@
+./mk-tsan2 llvm
+./mk-tsan2 llvm-parrot
+./mk origin

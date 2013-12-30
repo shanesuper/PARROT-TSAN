@@ -353,11 +353,8 @@ void RecorderRT<RecordSerializer>::idle_sleep(void) {
   if (pthread_self() != idle_th){ \
 	 threadLocalTurnNum[_S::self()*2]=stat.globalTurnNum; \
 	 threadLocalTurnNum[_S::self()*2+1]=stat.globalTurnNum+Scheduler::runq.real_size();}\
-
-#if 0
   if (_S::self() != 1)\
   fprintf(stderr,"[%4u,%4u]\ttid %d\t%s\n",threadLocalTurnNum[_S::self()*2],threadLocalTurnNum[_S::self()*2+1],_S::self(),__FUNCTION__);
-#endif 
    
 #define SCHED_TIMER_END(syncop, ...) \
   SCHED_TIMER_END_COMMON(syncop, __VA_ARGS__); \
