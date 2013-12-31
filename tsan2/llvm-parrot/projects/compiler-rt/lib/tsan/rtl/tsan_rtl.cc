@@ -517,12 +517,23 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
   StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
   
   int tid = thr-> tid;
-  u32* parrotTurnNumPtr = parrotTurnNum + 2*tid;
+  u32* parrotTurnNumPtr;
+  switch (tid) {
+  	case 0:
+	  parrotTurnNumPtr = parrotTurnNum;
+	  break;
+	case 1:
+	  return;
+	  break;
+	default:
+ 	  parrotTurnNumPtr = parrotTurnNum + 2*tid+2;
+	  break;
+  }
   u16 epoch = parrotTurnNumPtr[0];
   u16 epoch_next=parrotTurnNumPtr[1];
   ShadowValue sm = atomic_load((atomic_uint64_t*)shadow_mem, memory_order_relaxed);
   ShadowValue backup=sm;
-//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
+    //Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
   int result=sm.race(epoch,epoch_next,kAccessIsWrite);
   if(UNLIKELY(result&1)){
 //  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");

@@ -1,6 +1,8 @@
 export PATH=LLVM_PATH:$PATH
+such as: export PATH=/home/xinan/work/tsan2/llvm/build/Release+Asserts/bin/
 ./mk-llvm llvm
 export PATH=LLVM_PATH:$PATH
+such as: export PATH=/home/xinan/work/tsan2/llvm-parrot/build/Release+Asserts/bin/
 ./mk-llvm llvm-parrot
 
 ./mk-tsan2 origin
