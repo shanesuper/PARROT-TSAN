@@ -568,8 +568,6 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
   // That is, this call must be moved somewhere below.
   TraceAddEvent(thr, fast_state, EventTypeMop, pc);
 
-  if(thr->tid == 1)
-	  return;
   MemoryAccessImpl(thr, addr, kAccessSizeLog, kAccessIsWrite, kIsAtomic,
       shadow_mem,cur);
 }

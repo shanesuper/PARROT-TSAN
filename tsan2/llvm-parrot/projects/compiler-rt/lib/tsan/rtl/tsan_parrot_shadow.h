@@ -240,6 +240,7 @@ class ShadowValue {
 
 		//update
 		void update_read_epoch(const u16 &cur_epoch_start,const u16 &cur_epoch_next){
+			read_epoch_end_backup=read_epoch_end;
 			read_epoch_start = cur_epoch_start;
 			read_epoch_end = cur_epoch_next;
 			return;
@@ -257,7 +258,7 @@ class ShadowValue {
 					if(same_write_epoch(cur_epoch_start))
 						return 0;
 					ret=intersect_read_epoch(cur_epoch_start,cur_epoch_end)\
-							||intersect_write_epoch(cur_epoch_start,cur_epoch_end);
+							||intersect_write_epoch(cur_epoch_start,cur_epoch_end)||cur_epoch_start<read_epoch_end_backup;
 					if(UNLIKELY(cur_epoch_start>get_write_epoch_start())){
 						update_write_epoch(cur_epoch_start,cur_epoch_end);
 						ret+=2;
@@ -281,10 +282,12 @@ class ShadowValue {
 			return *(u64 *)this == *(u64 *)&sval;
 		}
 	private:
-		u16 read_epoch_start;
-		u16 read_epoch_end;
-		u16 write_epoch_start;
-		u16 write_epoch_end;
+		u64 read_epoch_start :12;
+		u64 read_epoch_end :12;
+		u64 write_epoch_start :12;
+		u64 write_epoch_end :12;
+		u64 read_epoch_end_backup :12;
+		u64 unused :4;
 };
 const ShadowValue SV_Zero=ShadowValue(0);
 const ShadowValue SV_Rodata=ShadowValue(u64(-1));
