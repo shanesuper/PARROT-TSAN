@@ -533,10 +533,10 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
   u16 epoch_next=parrotTurnNumPtr[1];
   ShadowValue sm = atomic_load((atomic_uint64_t*)shadow_mem, memory_order_relaxed);
   ShadowValue backup=sm;
-    //Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
+  if((addr&((1<<12)-1))==0xa10)
+    Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:read[%d,%d]write[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
   int result=sm.race(epoch,epoch_next,kAccessIsWrite);
   if(UNLIKELY(result&1)){
-//  Printf("[TSAN PARROT DEBUG] thread:%d, thread epoch:[%d,%d], shadow_memory epoch:write[%d,%d]read[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,backup.get_read_epoch_start(),backup.get_read_epoch_end(),backup.get_write_epoch_start(),backup.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
 	  //some handle race stuff
 //	  Printf("[TSAN PARROT DEBUG] ------- race detected!!! -------\n");
 	if(flags()->report_bugs)
@@ -553,6 +553,8 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
 		}
 	}
   }
+  if((addr&((1<<12)-1))==0xa10)
+  Printf("[TSAN PARROT DEBUG]after-- thread:%d, thread epoch:[%d,%d], shadow_memory epoch:read[%d,%d]write[%d,%d], addr:%0x, of %s\n", thr->tid, epoch,epoch_next,sm.get_read_epoch_start(),sm.get_read_epoch_end(),sm.get_write_epoch_start(),sm.get_write_epoch_end(),addr,kAccessIsWrite?"Write":"Read");
   return;
   HandleRace(thr, (u64*)shadow_mem, Shadow(0), Shadow(0));
 
@@ -649,6 +651,8 @@ ALWAYS_INLINE USED
 void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic) {
   ShadowValue* shadow_mem= (ShadowValue*) MemToShadow(addr);
+  if((addr&((1<<12)-1))==0xa10)
+    Printf("[TSAN PARROT DEBUG] thread:%d, addr:%0x, of %s\n", thr->tid, addr,kAccessIsWrite?"Write":"Read");
 #if 0
   u64 *shadow_mem = (u64*)MemToShadow(addr);
   DPrintf2("#%d: MemoryAccess: @%p %p size=%d"
@@ -680,7 +684,7 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
   FastState fast_state = thr->fast_state;
   if (parrotTurnNum==0)
   	parrotTurnNum=get_parrotTurnNum();
-  if (fast_state.GetIgnoreBit()||parrotTurnNum==0||thr->tid==1){
+  if (fast_state.GetIgnoreBit()||parrotTurnNum==0){
 	  return;
   }
 
